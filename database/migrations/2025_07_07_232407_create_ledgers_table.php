@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('ledgers', function (Blueprint $table) {
             $table->id();
             $table->string('name')->unique();
+            $table->foreignId('chart_of_account_id')->nullable()->constrained('chart_of_accounts')->onDelete('set null');
             $table->string('folio');
             $table->boolean('is_active')->default(true);
             $table->date('opening_date');

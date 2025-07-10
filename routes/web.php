@@ -3,18 +3,13 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\LedgerController;
 use App\Http\Controllers\TransactionController;
-use App\Http\Controllers\JournalEntryController;
 use App\Http\Controllers\ChartOfAccountController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\VoucherController;
+use App\Http\Controllers\PartyController;
+use App\Http\Controllers\EntityManagementController;
 
-// Route::get('/', function () {
-//     return view('welcome');
-// });
-
-Auth::routes();
-
-Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
+// Auth::routes();
 
 Route::get('/', function () {
     return redirect()->route('ledgers.index');
@@ -24,12 +19,7 @@ Route::resource('ledgers', LedgerController::class)->except(['edit', 'update', '
 Route::get('ledgers/{ledger}/export', [LedgerController::class, 'export'])->name('ledgers.export');
 Route::get('ledgers/{ledger}/export-pdf', [LedgerController::class, 'exportPdf'])->name('ledgers.export-pdf');
 
-Route::prefix('journal-entries')->name('journal-entries.')->group(function () {
-    Route::get('/', [JournalEntryController::class, 'index'])->name('index');
-    Route::get('/create', [JournalEntryController::class, 'create'])->name('create');
-    Route::post('/', [JournalEntryController::class, 'store'])->name('store');
-    Route::get('/{uuid}', [JournalEntryController::class, 'show'])->name('show');
-});
+
 
 Route::resource('chart-of-accounts', ChartOfAccountController::class)->names([
     'index' => 'chart-of-accounts.index',
@@ -68,4 +58,26 @@ Route::prefix('vouchers')->name('vouchers.')->group(function () {
     Route::post('/{voucher}/cancel', [VoucherController::class, 'cancel'])->name('cancel');
     Route::get('/{voucher}/duplicate', [VoucherController::class, 'duplicate'])->name('duplicate');
     Route::get('/{voucher}/print', [VoucherController::class, 'print'])->name('print');
+});
+
+
+Route::resource('parties', PartyController::class);
+
+Route::prefix('entity-management')->name('entity-management.')->group(function () {
+    Route::get('/', [EntityManagementController::class, 'index'])->name('index');
+    Route::get('/create', [EntityManagementController::class, 'create'])->name('create');
+    Route::post('/', [EntityManagementController::class, 'store'])->name('store');
+    Route::get('/{entityManagement}', [EntityManagementController::class, 'show'])->name('show');
+    Route::get('/{entityManagement}/edit', [EntityManagementController::class, 'edit'])->name('edit');
+    Route::put('/{entityManagement}', [EntityManagementController::class, 'update'])->name('update');
+    Route::delete('/{entityManagement}', [EntityManagementController::class, 'destroy'])->name('destroy');
+
+    // Utility routes
+    Route::post('/create-defaults', [EntityManagementController::class, 'createDefaults'])->name('create-defaults');
+});
+
+// API routes for getting entity management records
+Route::prefix('api/entity-management')->group(function () {
+    Route::get('/entity-creation-head', [EntityManagementController::class, 'getEntityCreationHead'])->name('api.entity-creation-head');
+    Route::get('/voucher-ledger', [EntityManagementController::class, 'getVoucherLedger'])->name('api.voucher-ledger');
 });
