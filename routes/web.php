@@ -62,6 +62,15 @@ Route::prefix('vouchers')->name('vouchers.')->group(function () {
 
 
 Route::resource('parties', PartyController::class);
+// Additional party routes for entity management
+Route::prefix('parties')->name('parties.')->group(function () {
+    // AJAX routes for entity management
+    Route::post('/{party}/link-entity', [PartyController::class, 'linkEntity'])->name('link-entity');
+    Route::delete('/{party}/unlink-entity', [PartyController::class, 'unlinkEntity'])->name('unlink-entity');
+
+    // AJAX route for getting entities by type
+    Route::post('/get-entities-by-type', [PartyController::class, 'getEntitiesByType'])->name('get-entities-by-type');
+});
 
 Route::prefix('entity-management')->name('entity-management.')->group(function () {
     Route::get('/', [EntityManagementController::class, 'index'])->name('index');
