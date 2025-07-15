@@ -8,6 +8,9 @@ use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\VoucherController;
 use App\Http\Controllers\PartyController;
 use App\Http\Controllers\EntityManagementController;
+use App\Http\Controllers\VehicleController;
+use App\Http\Controllers\MinesController;
+use App\Http\Controllers\PurchaseController;
 
 // Auth::routes();
 
@@ -62,15 +65,15 @@ Route::prefix('vouchers')->name('vouchers.')->group(function () {
 
 
 Route::resource('parties', PartyController::class);
-// Additional party routes for entity management
-Route::prefix('parties')->name('parties.')->group(function () {
-    // AJAX routes for entity management
-    Route::post('/{party}/link-entity', [PartyController::class, 'linkEntity'])->name('link-entity');
-    Route::delete('/{party}/unlink-entity', [PartyController::class, 'unlinkEntity'])->name('unlink-entity');
 
-    // AJAX route for getting entities by type
-    Route::post('/get-entities-by-type', [PartyController::class, 'getEntitiesByType'])->name('get-entities-by-type');
+// Party Ledgers API Routes
+Route::prefix('api/parties/{party}')->group(function () {
+    Route::get('/available-ledgers', [PartyController::class, 'getAvailableLedgers']);
+    Route::post('/link-ledger', [PartyController::class, 'linkLedger']);
+    Route::post('/unlink-ledger', [PartyController::class, 'unlinkLedger']);
+    Route::get('/ledger-summary', [PartyController::class, 'getLedgerSummary']);
 });
+
 
 Route::prefix('entity-management')->name('entity-management.')->group(function () {
     Route::get('/', [EntityManagementController::class, 'index'])->name('index');
@@ -90,3 +93,12 @@ Route::prefix('api/entity-management')->group(function () {
     Route::get('/entity-creation-head', [EntityManagementController::class, 'getEntityCreationHead'])->name('api.entity-creation-head');
     Route::get('/voucher-ledger', [EntityManagementController::class, 'getVoucherLedger'])->name('api.voucher-ledger');
 });
+
+
+Route::resource('vehicles', VehicleController::class);
+Route::resource('mines', MinesController::class);
+Route::resource('purchases', PurchaseController::class);
+
+    // API route for getting vehicle drivers
+    Route::get('/api/vehicles/{vehicle}/drivers', [PurchaseController::class, 'getVehicleDrivers']);
+

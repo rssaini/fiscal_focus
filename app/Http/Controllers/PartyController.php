@@ -4,46 +4,22 @@ namespace App\Http\Controllers;
 
 use App\Models\Party;
 use App\Models\PartyContact;
-use App\Models\PartyHasEntity;
-use App\Models\Customer;
-use App\Models\Supplier;
-use App\Models\Employee;
+use App\Models\Ledger;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Http\JsonResponse;
 
 class PartyController extends Controller
 {
     /**
      * Display a listing of the parties.
      */
-    public function index(Request $request)
+    public function index()
     {
-        $query = Party::with(['contacts', 'primaryContact', 'entityRelationships.entity']);
+        $parties = Party::with(['contacts', 'ledgers'])
+            ->orderBy('name')
+            ->get();
 
-        // Search functionality
-        if ($request->filled('search')) {
-            $query->search($request->search);
-        }
-
-        // Filter by entity type
-        if ($request->filled('entity_type')) {
-            $query->withEntityType($request->entity_type);
-        }
-
-        // Filter by credit limit range
-        if ($request->filled('credit_limit_min')) {
-            $query->where('credit_limit', '>=', $request->credit_limit_min);
-        }
-        if ($request->filled('credit_limit_max')) {
-            $query->where('credit_limit', '<=', $request->credit_limit_max);
-        }
-
-        $parties = $query->orderBy('name')->paginate(20);
-
-        // Get filter options
-        $entityTypes = Party::getAvailableEntityTypes();
-
-        return view('parties.index', compact('parties', 'entityTypes'));
+        return view('parties.index', compact('parties'));
     }
 
     /**
@@ -51,10 +27,7 @@ class PartyController extends Controller
      */
     public function create()
     {
-        $availableEntityTypes = Party::getAvailableEntityTypes();
-        $availableEntities = $this->getAvailableEntitiesForLinking();
-
-        return view('parties.create', compact('availableEntityTypes', 'availableEntities'));
+        return view('parties.create');
     }
 
     /**
@@ -65,52 +38,13 @@ class PartyController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'credit_limit' => 'required|numeric|min:0',
-            'credit_days' => 'required|integer|min:0',
-
-            // Contact validation
-            'contacts.*.name' => 'required|string|max:255',
-            'contacts.*.designation' => 'nullable|string|max:255',
-            'contacts.*.email' => 'nullable|email|max:255',
-            'contacts.*.phone' => 'nullable|string|max:20',
-            'contacts.*.mobile' => 'nullable|string|max:20',
-            'contacts.*.is_primary' => 'boolean',
-            'contacts.*.notes' => 'nullable|string',
-
-            // Entity linking validation
-            'linked_entities' => 'nullable|array',
-            'linked_entities.*' => 'string', // Format: "ModelClass:ID"
+            'credit_days' => 'required|integer|min:0|max:365',
         ]);
 
-        try {
-            DB::beginTransaction();
+        $party = Party::create($request->all());
 
-            // Create party
-            $party = Party::create([
-                'name' => $request->name,
-                'credit_limit' => $request->credit_limit,
-                'credit_days' => $request->credit_days,
-            ]);
-
-            // Create contacts
-            if ($request->has('contacts')) {
-                $this->createPartyContacts($party, $request->contacts);
-            }
-
-            // Link entities
-            if ($request->has('linked_entities')) {
-                $this->linkEntitiesToParty($party, $request->linked_entities);
-            }
-
-            DB::commit();
-
-            return redirect()->route('parties.index')
-                ->with('success', 'Party created successfully.');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return back()->withErrors(['error' => 'Error creating party: ' . $e->getMessage()])
-                ->withInput();
-        }
+        return redirect()->route('parties.index')
+            ->with('success', 'Party created successfully.');
     }
 
     /**
@@ -118,15 +52,34 @@ class PartyController extends Controller
      */
     public function show(Party $party)
     {
-        $party->load(['contacts', 'entityRelationships.entity']);
+        $party->load(['contacts', 'ledgers.chartOfAccount']);
 
-        // Get entity counts by type
-        $entityCounts = $party->getEntityCountByType();
+        // Get ledgers summary
+        $ledgersSummary = $party->ledgers_summary;
 
-        // Get recent activity or transactions if available
-        $recentActivity = $this->getRecentActivityForParty($party);
+        // Get recent transactions from all linked ledgers
+        $recentTransactions = collect();
+        foreach ($party->ledgers as $ledger) {
+            $transactions = $ledger->transactions()
+                ->orderBy('transaction_date', 'desc')
+                ->orderBy('id', 'desc')
+                ->limit(5)
+                ->get()
+                ->map(function ($transaction) use ($ledger) {
+                    $transaction->ledger_name = $ledger->name;
+                    return $transaction;
+                });
+            $recentTransactions = $recentTransactions->merge($transactions);
+        }
 
-        return view('parties.show', compact('party', 'entityCounts', 'recentActivity'));
+        // Sort by date and limit to 10 most recent
+        $recentTransactions = $recentTransactions
+            ->sortByDesc(function ($transaction) {
+                return $transaction->transaction_date->timestamp;
+            })
+            ->take(10);
+
+        return view('parties.show', compact('party', 'ledgersSummary', 'recentTransactions'));
     }
 
     /**
@@ -134,12 +87,7 @@ class PartyController extends Controller
      */
     public function edit(Party $party)
     {
-        $party->load(['contacts', 'entityRelationships.entity']);
-        $availableEntityTypes = Party::getAvailableEntityTypes();
-        $availableEntities = $this->getAvailableEntitiesForLinking();
-        $linkedEntityIds = $this->getLinkedEntityIds($party);
-
-        return view('parties.edit', compact('party', 'availableEntityTypes', 'availableEntities', 'linkedEntityIds'));
+        return view('parties.edit', compact('party'));
     }
 
     /**
@@ -150,54 +98,13 @@ class PartyController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'credit_limit' => 'required|numeric|min:0',
-            'credit_days' => 'required|integer|min:0',
-
-            // Contact validation
-            'contacts.*.name' => 'required|string|max:255',
-            'contacts.*.designation' => 'nullable|string|max:255',
-            'contacts.*.email' => 'nullable|email|max:255',
-            'contacts.*.phone' => 'nullable|string|max:20',
-            'contacts.*.mobile' => 'nullable|string|max:20',
-            'contacts.*.is_primary' => 'boolean',
-            'contacts.*.notes' => 'nullable|string',
-
-            // Entity linking validation
-            'linked_entities' => 'nullable|array',
-            'linked_entities.*' => 'string', // Format: "ModelClass:ID"
+            'credit_days' => 'required|integer|min:0|max:365',
         ]);
 
-        try {
-            DB::beginTransaction();
+        $party->update($request->all());
 
-            // Update party
-            $party->update([
-                'name' => $request->name,
-                'credit_limit' => $request->credit_limit,
-                'credit_days' => $request->credit_days,
-            ]);
-
-            // Update contacts
-            $party->contacts()->delete();
-            if ($request->has('contacts')) {
-                $this->createPartyContacts($party, $request->contacts);
-            }
-
-            // Update entity relationships
-            $party->entityRelationships()->delete();
-            if ($request->has('linked_entities')) {
-                $this->linkEntitiesToParty($party, $request->linked_entities);
-            }
-
-            DB::commit();
-
-            return redirect()->route('parties.show', $party)
-                ->with('success', 'Party updated successfully.');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return back()->withErrors(['error' => 'Error updating party: ' . $e->getMessage()])
-                ->withInput();
-        }
+        return redirect()->route('parties.show', $party)
+            ->with('success', 'Party updated successfully.');
     }
 
     /**
@@ -205,190 +112,129 @@ class PartyController extends Controller
      */
     public function destroy(Party $party)
     {
-        try {
-            $party->delete();
-            return redirect()->route('parties.index')
-                ->with('success', 'Party deleted successfully.');
-        } catch (\Exception $e) {
-            return back()->withErrors(['error' => 'Error deleting party: ' . $e->getMessage()]);
-        }
+        $partyName = $party->name;
+        $party->delete();
+
+        return redirect()->route('parties.index')
+            ->with('success', "Party '{$partyName}' has been deleted successfully.");
     }
 
     /**
-     * Link an entity to a party via AJAX.
+     * Get available ledgers for linking to a party.
      */
-    public function linkEntity(Request $request, Party $party)
+    public function getAvailableLedgers(Party $party): JsonResponse
+    {
+        $linkedLedgerIds = $party->ledgers()->pluck('ledger_id')->toArray();
+
+        $availableLedgers = Ledger::active()
+            ->whereNotIn('id', $linkedLedgerIds)
+            ->with('chartOfAccount')
+            ->orderBy('name')
+            ->get()
+            ->map(function ($ledger) {
+                return [
+                    'id' => $ledger->id,
+                    'name' => $ledger->name,
+                    'folio' => $ledger->folio,
+                    'chart_of_account' => $ledger->chartOfAccount ? $ledger->chartOfAccount->account_name : 'N/A'
+                ];
+            });
+
+        return response()->json($availableLedgers);
+    }
+
+    /**
+     * Link a ledger to a party.
+     */
+    public function linkLedger(Request $request, Party $party): JsonResponse
     {
         $request->validate([
-            'entity_type' => 'required|string',
-            'entity_id' => 'required|integer',
+            'ledger_id' => 'required|exists:ledgers,id'
         ]);
 
-        try {
-            $entityClass = $request->entity_type;
-            $entity = $entityClass::findOrFail($request->entity_id);
+        $ledger = Ledger::findOrFail($request->ledger_id);
 
-            $relationship = $party->linkEntity($entity);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Entity linked successfully.',
-                'relationship' => $relationship->load('entity')
-            ]);
-
-        } catch (\Exception $e) {
+        if ($party->hasLedger($ledger)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error linking entity: ' . $e->getMessage()
+                'message' => 'This ledger is already linked to the party.'
             ], 422);
         }
+
+        $party->linkLedger($ledger);
+
+        // Log activity
+        activity()
+            ->performedOn($party)
+            ->withProperties(['ledger_name' => $ledger->name, 'ledger_id' => $ledger->id])
+            ->log('Linked ledger to party');
+
+        return response()->json([
+            'success' => true,
+            'message' => "Ledger '{$ledger->name}' has been successfully linked to party '{$party->name}'.",
+            'ledger' => [
+                'id' => $ledger->id,
+                'name' => $ledger->name,
+                'folio' => $ledger->folio,
+                'balance' => $ledger->getCurrentBalance()
+            ]
+        ]);
     }
 
     /**
-     * Unlink an entity from a party via AJAX.
+     * Unlink a ledger from a party.
      */
-    public function unlinkEntity(Request $request, Party $party)
+    public function unlinkLedger(Request $request, Party $party): JsonResponse
     {
         $request->validate([
-            'entity_type' => 'required|string',
-            'entity_id' => 'required|integer',
+            'ledger_id' => 'required|exists:ledgers,id'
         ]);
 
-        try {
-            $entityClass = $request->entity_type;
-            $entity = $entityClass::findOrFail($request->entity_id);
+        $ledger = Ledger::findOrFail($request->ledger_id);
 
-            $success = $party->unlinkEntity($entity);
-
-            return response()->json([
-                'success' => $success,
-                'message' => $success ? 'Entity unlinked successfully.' : 'Entity was not linked.'
-            ]);
-
-        } catch (\Exception $e) {
+        if (!$party->hasLedger($ledger)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error unlinking entity: ' . $e->getMessage()
+                'message' => 'This ledger is not linked to the party.'
             ], 422);
         }
-    }
 
-    /**
-     * Get entities for AJAX requests.
-     */
-    public function getEntitiesByType(Request $request)
-    {
-        $request->validate([
-            'entity_type' => 'required|string',
+        $party->unlinkLedger($ledger);
+
+        // Log activity
+        activity()
+            ->performedOn($party)
+            ->withProperties(['ledger_name' => $ledger->name, 'ledger_id' => $ledger->id])
+            ->log('Unlinked ledger from party');
+
+        return response()->json([
+            'success' => true,
+            'message' => "Ledger '{$ledger->name}' has been successfully unlinked from party '{$party->name}'."
         ]);
-
-        try {
-            $entityClass = $request->entity_type;
-            $entities = $entityClass::select('id', 'name')->get();
-
-            return response()->json([
-                'success' => true,
-                'entities' => $entities
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error fetching entities: ' . $e->getMessage()
-            ], 422);
-        }
     }
 
     /**
-     * Helper method to create party contacts.
+     * Get party's ledger summary.
      */
-    private function createPartyContacts(Party $party, array $contactsData)
+    public function getLedgerSummary(Party $party): JsonResponse
     {
-        $hasPrimary = collect($contactsData)->contains('is_primary', true);
+        $summary = $party->ledgers_summary;
 
-        foreach ($contactsData as $index => $contactData) {
-            if (!empty($contactData['name'])) {
-                // Set first contact as primary if no primary is selected
-                $isPrimary = $contactData['is_primary'] ?? false;
-                if (!$hasPrimary && $index === 0) {
-                    $isPrimary = true;
-                }
+        $ledgersDetail = $party->ledgers->map(function ($ledger) {
+            $balance = $ledger->getCurrentBalance();
+            return [
+                'id' => $ledger->id,
+                'name' => $ledger->name,
+                'folio' => $ledger->folio,
+                'balance' => $balance['balance'],
+                'balance_type' => $balance['type'],
+                'chart_of_account' => $ledger->chartOfAccount ? $ledger->chartOfAccount->account_name : 'N/A'
+            ];
+        });
 
-                PartyContact::create([
-                    'party_id' => $party->id,
-                    'name' => $contactData['name'],
-                    'designation' => $contactData['designation'] ?? null,
-                    'email' => $contactData['email'] ?? null,
-                    'phone' => $contactData['phone'] ?? null,
-                    'mobile' => $contactData['mobile'] ?? null,
-                    'is_primary' => $isPrimary,
-                    'notes' => $contactData['notes'] ?? null,
-                ]);
-            }
-        }
-    }
-
-    /**
-     * Helper method to link entities to party.
-     */
-    private function linkEntitiesToParty(Party $party, array $linkedEntities)
-    {
-        foreach ($linkedEntities as $entityString) {
-            if (strpos($entityString, ':') !== false) {
-                [$entityClass, $entityId] = explode(':', $entityString);
-
-                if (class_exists($entityClass)) {
-                    $entity = $entityClass::find($entityId);
-                    if ($entity) {
-                        $party->linkEntity($entity);
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Get available entities for linking.
-     */
-    private function getAvailableEntitiesForLinking(): array
-    {
-        $entities = [];
-
-        // Get customers
-        if (class_exists('App\Models\Customer')) {
-            $entities['App\Models\Customer'] = Customer::select('id', 'name')->get();
-        }
-
-        // Get suppliers
-        if (class_exists('App\Models\Supplier')) {
-            $entities['App\Models\Supplier'] = Supplier::select('id', 'name')->get();
-        }
-
-        // Get employees
-        if (class_exists('App\Models\Employee')) {
-            $entities['App\Models\Employee'] = Employee::select('id', 'name')->get();
-        }
-
-        return $entities;
-    }
-
-    /**
-     * Get linked entity IDs for editing.
-     */
-    private function getLinkedEntityIds(Party $party): array
-    {
-        return $party->entityRelationships->map(function ($relationship) {
-            return $relationship->model_type . ':' . $relationship->model_id;
-        })->toArray();
-    }
-
-    /**
-     * Get recent activity for a party (placeholder for future implementation).
-     */
-    private function getRecentActivityForParty(Party $party): array
-    {
-        // This could be extended to show recent transactions, vouchers, etc.
-        // For now, return empty array
-        return [];
+        return response()->json([
+            'summary' => $summary,
+            'ledgers' => $ledgersDetail
+        ]);
     }
 }

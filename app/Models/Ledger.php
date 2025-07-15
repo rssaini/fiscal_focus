@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -11,100 +12,148 @@ class Ledger extends Model
 
     protected $fillable = [
         'name',
+        'chart_of_account_id',
         'folio',
         'is_active',
         'opening_date',
         'opening_balance',
         'balance_type',
-        'chart_of_account_id'
     ];
 
     protected $casts = [
         'opening_date' => 'date',
         'opening_balance' => 'decimal:2',
-        'is_active' => 'boolean'
+        'is_active' => 'boolean',
     ];
 
-    public function transactions()
-    {
-        return $this->hasMany(Transaction::class);
-    }
-
+    /**
+     * Define the relationship with chart of accounts.
+     */
     public function chartOfAccount()
     {
         return $this->belongsTo(ChartOfAccount::class);
     }
 
-    // ... existing methods remain the same ...
-
-    public function getOpeningBalanceForDate($date)
+    /**
+     * Define the relationship with transactions.
+     */
+    public function transactions()
     {
-        $startDate = Carbon::parse($date)->startOfMonth();
-        $previousMonth = $startDate->copy()->subMonth();
+        return $this->hasMany(Transaction::class);
+    }
 
-        // If the date is before ledger opening date, return opening balance
-        if ($startDate->lt($this->opening_date)) {
+    /**
+     * Define the many-to-many relationship with parties.
+     */
+    public function parties()
+    {
+        return $this->belongsToMany(Party::class, 'party_has_ledgers', 'ledger_id', 'party_id')
+                    ->withTimestamps();
+    }
+
+    /**
+     * Get current balance of the ledger.
+     */
+    public function getCurrentBalance()
+    {
+        $latestTransaction = $this->transactions()
+            ->orderBy('transaction_date', 'desc')
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$latestTransaction) {
             return [
                 'balance' => $this->opening_balance,
                 'type' => $this->balance_type
             ];
         }
 
-        // Get last transaction before the start date
-        $lastTransaction = $this->transactions()
-            ->where('transaction_date', '<', $startDate)
+        return [
+            'balance' => $latestTransaction->running_balance,
+            'type' => $latestTransaction->running_balance_type
+        ];
+    }
+
+    /**
+     * Get opening balance for a specific date.
+     */
+    public function getOpeningBalanceForDate(Carbon $date)
+    {
+        if ($date->lessThanOrEqualTo($this->opening_date)) {
+            return [
+                'balance' => $this->opening_balance,
+                'type' => $this->balance_type
+            ];
+        }
+
+        $previousTransaction = $this->transactions()
+            ->where('transaction_date', '<', $date)
             ->orderBy('transaction_date', 'desc')
             ->orderBy('id', 'desc')
             ->first();
 
-        if ($lastTransaction) {
+        if (!$previousTransaction) {
             return [
-                'balance' => $lastTransaction->running_balance,
-                'type' => $lastTransaction->running_balance_type
+                'balance' => $this->opening_balance,
+                'type' => $this->balance_type
             ];
         }
 
         return [
-            'balance' => $this->opening_balance,
-            'type' => $this->balance_type
+            'balance' => $previousTransaction->running_balance,
+            'type' => $previousTransaction->running_balance_type
         ];
     }
 
-    public function getCurrentBalance()
+    /**
+     * Check if ledger is linked to a specific party.
+     */
+    public function isLinkedToParty(Party $party): bool
     {
-        $lastTransaction = $this->transactions()
-            ->orderBy('transaction_date', 'desc')
-            ->orderBy('id', 'desc')
-            ->first();
-
-        if ($lastTransaction) {
-            return [
-                'balance' => $lastTransaction->running_balance,
-                'type' => $lastTransaction->running_balance_type
-            ];
-        }
-
-        return [
-            'balance' => $this->opening_balance,
-            'type' => $this->balance_type
-        ];
+        return $this->parties()->where('party_id', $party->id)->exists();
     }
 
-    // Get suggested balance type based on chart of account
-    public function getSuggestedBalanceType()
+    /**
+     * Link this ledger to a party.
+     */
+    public function linkToParty(Party $party): bool
     {
-        if ($this->chartOfAccount) {
-            return $this->chartOfAccount->normal_balance;
+        if ($this->isLinkedToParty($party)) {
+            return false; // Already linked
         }
-        return 'debit'; // default
+
+        $this->parties()->attach($party->id);
+        return true;
     }
 
-    // Get account type display
-    public function getAccountTypeDisplay()
+    /**
+     * Unlink this ledger from a party.
+     */
+    public function unlinkFromParty(Party $party): bool
     {
-        if ($this->chartOfAccount) {
-            return ucfirst(str_replace('_', ' ', $this->chartOfAccount->account_type));
+        if (!$this->isLinkedToParty($party)) {
+            return false; // Not linked
         }
-        return 'N/A';
+
+        $this->parties()->detach($party->id);
+        return true;
+    }
+
+    /**
+     * Scope for active ledgers.
+     */
+    public function scopeActive($query)
+    {
+        return $query->where('is_active', true);
+    }
+
+    /**
+     * Scope for ledgers with specific chart of account type.
+     */
+    public function scopeByAccountType($query, string $accountType)
+    {
+        return $query->whereHas('chartOfAccount', function ($q) use ($accountType) {
+            $q->where('account_type', $accountType);
+        });
     }
 }

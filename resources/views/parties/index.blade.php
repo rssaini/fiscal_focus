@@ -1,159 +1,102 @@
 @extends('layouts.app')
 
 @section('content')
-<div class="container">
-    <div class="row justify-content-center">
-        <div class="col-md-12">
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <h4>Party Management</h4>
-                    <a href="{{ route('parties.create') }}" class="btn btn-primary">Add New Party</a>
+                    <h3 class="card-title">Parties Management</h3>
+                    <a href="{{ route('parties.create') }}" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add New Party
+                    </a>
                 </div>
-
                 <div class="card-body">
-                    @if (session('success'))
-                        <div class="alert alert-success">
+                    @if(session('success'))
+                        <div class="alert alert-success alert-dismissible fade show" role="alert">
                             {{ session('success') }}
-                        </div>
-                    @endif
-
-                    @if (session('error'))
-                        <div class="alert alert-danger">
-                            {{ session('error') }}
-                        </div>
-                    @endif
-
-                    <!-- Search and Filter Form -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <form method="GET" action="{{ route('parties.index') }}" class="row g-3">
-                                <div class="col-md-4">
-                                    <label class="form-label">Search</label>
-                                    <input type="text" name="search" class="form-control"
-                                           placeholder="Search by name, contact name, email, phone..."
-                                           value="{{ request('search') }}">
-                                </div>
-
-                                <div class="col-md-3">
-                                    <label class="form-label">Entity Type</label>
-                                    <select name="entity_type" class="form-select">
-                                        <option value="">All Entity Types</option>
-                                        @foreach($entityTypes as $class => $label)
-                                            <option value="{{ $class }}" {{ request('entity_type') == $class ? 'selected' : '' }}>
-                                                {{ $label }}
-                                            </option>
-                                        @endforeach
-                                    </select>
-                                </div>
-
-                                <div class="col-md-2">
-                                    <label class="form-label">Min Credit</label>
-                                    <input type="number" name="credit_limit_min" class="form-control"
-                                           placeholder="Min" step="0.01" value="{{ request('credit_limit_min') }}">
-                                </div>
-
-                                <div class="col-md-2">
-                                    <label class="form-label">Max Credit</label>
-                                    <input type="number" name="credit_limit_max" class="form-control"
-                                           placeholder="Max" step="0.01" value="{{ request('credit_limit_max') }}">
-                                </div>
-
-                                <div class="col-md-1 d-flex align-items-end">
-                                    <div class="btn-group w-100" role="group">
-                                        <button class="btn btn-outline-secondary" type="submit" title="Search">
-                                            <i class="fas fa-search"></i>
-                                        </button>
-                                        <a href="{{ route('parties.index') }}" class="btn btn-outline-danger" title="Clear">
-                                            <i class="fas fa-times"></i>
-                                        </a>
-                                    </div>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-
-                    <!-- Results Summary -->
-                    @if(request()->hasAny(['search', 'entity_type', 'credit_limit_min', 'credit_limit_max']))
-                        <div class="row mb-3">
-                            <div class="col-12">
-                                <div class="alert alert-info">
-                                    <i class="fas fa-filter me-2"></i>
-                                    Showing filtered results: {{ $parties->total() }} parties found
-                                    @if(request('search'))
-                                        | Search: "{{ request('search') }}"
-                                    @endif
-                                    @if(request('entity_type'))
-                                        | Entity Type: {{ $entityTypes[request('entity_type')] ?? request('entity_type') }}
-                                    @endif
-                                    @if(request('credit_limit_min') || request('credit_limit_max'))
-                                        | Credit Range: ₹{{ number_format(request('credit_limit_min', 0), 2) }} - ₹{{ number_format(request('credit_limit_max', 999999), 2) }}
-                                    @endif
-                                </div>
-                            </div>
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                         </div>
                     @endif
 
                     <div class="table-responsive">
-                        <table class="table table-striped">
+                        <table class="table table-striped table-hover">
                             <thead>
                                 <tr>
-                                    <th>ID</th>
                                     <th>Name</th>
-                                    <th>Primary Contact</th>
-                                    <th>Credit Info</th>
-                                    <th>Linked Entities</th>
+                                    <th>Credit Limit</th>
+                                    <th>Credit Days</th>
+                                    <th>Contacts</th>
+                                    <th>Linked Ledgers</th>
+                                    <th>Financial Summary</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                @forelse ($parties as $party)
+                                @forelse($parties as $party)
                                     <tr>
-                                        <td>{{ $party->id }}</td>
                                         <td>
                                             <strong>{{ $party->name }}</strong>
-                                            <br><small class="text-muted">{{ $party->contacts->count() }} contact(s)</small>
                                         </td>
                                         <td>
-                                            @if ($party->primaryContact)
-                                                <strong>{{ $party->primaryContact->name }}</strong>
-                                                @if ($party->primaryContact->designation)
-                                                    <br><small class="text-muted">{{ $party->primaryContact->designation }}</small>
-                                                @endif
-                                                <br><small class="text-primary">{{ $party->primaryContact->display_contact }}</small>
+                                            <span class="badge bg-info">
+                                                ₹{{ number_format($party->credit_limit, 2) }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-secondary">
+                                                {{ $party->credit_days }} days
+                                            </span>
+                                        </td>
+                                        <td>
+                                            @if($party->contacts->count() > 0)
+                                                <span class="badge bg-success">
+                                                    {{ $party->contacts->count() }} contact{{ $party->contacts->count() > 1 ? 's' : '' }}
+                                                </span>
                                             @else
-                                                <span class="text-muted">No primary contact</span>
+                                                <span class="text-muted">No contacts</span>
                                             @endif
                                         </td>
                                         <td>
-                                            <strong>₹{{ number_format($party->credit_limit, 2) }}</strong>
-                                            <br><small class="text-muted">{{ $party->credit_days }} days</small>
-                                        </td>
-                                        <td>
-                                            @if($party->entityRelationships->count() > 0)
+                                            @if($party->ledgers->count() > 0)
                                                 <div class="d-flex flex-wrap gap-1">
-                                                    @php
-                                                        $entityCounts = $party->getEntityCountByType();
-                                                    @endphp
-                                                    @foreach($entityCounts as $modelType => $count)
-                                                        @php
-                                                            $displayType = str_replace('App\\Models\\', '', $modelType);
-                                                            $badgeClass = match($displayType) {
-                                                                'Customer' => 'bg-primary',
-                                                                'Supplier' => 'bg-success',
-                                                                'Employee' => 'bg-info',
-                                                                default => 'bg-secondary'
-                                                            };
-                                                        @endphp
-                                                        <span class="badge {{ $badgeClass }}" title="{{ $displayType }}">
-                                                            {{ $count }} {{ $displayType }}{{ $count > 1 ? 's' : '' }}
+                                                    @foreach($party->ledgers->take(3) as $ledger)
+                                                        @php $balance = $ledger->getCurrentBalance(); @endphp
+                                                        <span class="badge bg-{{ $balance['type'] == 'credit' ? 'warning' : 'primary' }}"
+                                                              title="{{ $ledger->name }}: {{ ucfirst($balance['type']) }} {{ number_format($balance['balance'], 2) }}">
+                                                            {{ $ledger->name }}
                                                         </span>
                                                     @endforeach
+                                                    @if($party->ledgers->count() > 3)
+                                                        <span class="badge bg-secondary">
+                                                            +{{ $party->ledgers->count() - 3 }} more
+                                                        </span>
+                                                    @endif
                                                 </div>
                                                 <small class="text-muted d-block mt-1">
-                                                    Total: {{ $party->total_entities_count }} entities
+                                                    Total: {{ $party->ledgers->count() }} ledger{{ $party->ledgers->count() > 1 ? 's' : '' }}
                                                 </small>
                                             @else
-                                                <span class="text-muted">No linked entities</span>
+                                                <span class="text-muted">No linked ledgers</span>
+                                            @endif
+                                        </td>
+                                        <td>
+                                            @php $summary = $party->ledgers_summary; @endphp
+                                            @if($summary['ledger_count'] > 0)
+                                                <div class="small">
+                                                    <div class="text-success">
+                                                        <i class="fas fa-arrow-down"></i> Receivable: ₹{{ number_format($summary['total_receivable'], 2) }}
+                                                    </div>
+                                                    <div class="text-danger">
+                                                        <i class="fas fa-arrow-up"></i> Payable: ₹{{ number_format($summary['total_payable'], 2) }}
+                                                    </div>
+                                                    <div class="fw-bold {{ $summary['net_payable'] > 0 ? 'text-danger' : 'text-success' }}">
+                                                        Net: ₹{{ number_format(abs($summary['net_payable']), 2) }}
+                                                        {{ $summary['net_payable'] > 0 ? '(Payable)' : '(Receivable)' }}
+                                                    </div>
+                                                </div>
+                                            @else
+                                                <span class="text-muted">No financial data</span>
                                             @endif
                                         </td>
                                         <td>
@@ -168,7 +111,7 @@
                                                     @csrf
                                                     @method('DELETE')
                                                     <button type="submit" class="btn btn-sm btn-danger" title="Delete"
-                                                            onclick="return confirm('Are you sure you want to delete this party and all associated contacts and entity relationships?')">
+                                                            onclick="return confirm('Are you sure you want to delete this party and all associated contacts and ledger relationships? This action cannot be undone.')">
                                                         <i class="fas fa-trash"></i>
                                                     </button>
                                                 </form>
@@ -177,37 +120,19 @@
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="6" class="text-center py-4">
-                                            @if(request()->hasAny(['search', 'entity_type', 'credit_limit_min', 'credit_limit_max']))
-                                                <div class="text-muted">
-                                                    <i class="fas fa-search fa-2x mb-2"></i>
-                                                    <p>No parties found matching your search criteria.</p>
-                                                    <a href="{{ route('parties.index') }}" class="btn btn-outline-primary">
-                                                        View All Parties
-                                                    </a>
-                                                </div>
-                                            @else
-                                                <div class="text-muted">
-                                                    <i class="fas fa-users fa-2x mb-2"></i>
-                                                    <p>No parties found. Get started by creating your first party.</p>
-                                                    <a href="{{ route('parties.create') }}" class="btn btn-primary">
-                                                        <i class="fas fa-plus"></i> Add New Party
-                                                    </a>
-                                                </div>
-                                            @endif
+                                        <td colspan="7" class="text-center text-muted py-4">
+                                            <i class="fas fa-users fa-3x mb-3 d-block"></i>
+                                            <h5>No parties found</h5>
+                                            <p>Create your first party to get started.</p>
+                                            <a href="{{ route('parties.create') }}" class="btn btn-primary">
+                                                <i class="fas fa-plus"></i> Add New Party
+                                            </a>
                                         </td>
                                     </tr>
                                 @endforelse
                             </tbody>
                         </table>
                     </div>
-
-                    <!-- Pagination -->
-                    @if($parties->hasPages())
-                        <div class="d-flex justify-content-center">
-                            {{ $parties->appends(request()->query())->links() }}
-                        </div>
-                    @endif
                 </div>
             </div>
         </div>

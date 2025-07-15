@@ -4,12 +4,12 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
+use Spatie\Activitylog\Traits\LogsActivity;
+use Spatie\Activitylog\LogOptions;
 
 class Party extends Model
 {
-    use HasFactory;
+    use HasFactory, LogsActivity;
 
     protected $fillable = [
         'name',
@@ -23,191 +23,120 @@ class Party extends Model
     ];
 
     /**
-     * Get the contacts for the party.
+     * Define the many-to-many relationship with ledgers.
      */
-    public function contacts(): HasMany
+    public function ledgers()
+    {
+        return $this->belongsToMany(Ledger::class, 'party_has_ledgers', 'party_id', 'ledger_id')
+                    ->withTimestamps();
+    }
+
+    /**
+     * Define the relationship with contacts.
+     */
+    public function contacts()
     {
         return $this->hasMany(PartyContact::class);
     }
 
     /**
-     * Get the primary contact for the party.
+     * Get ledgers summary with financial information.
      */
-    public function primaryContact(): HasOne
+    public function getLedgersSummaryAttribute()
     {
-        return $this->hasOne(PartyContact::class)->where('is_primary', true);
-    }
-
-    /**
-     * Get all entity relationships for this party.
-     */
-    public function entityRelationships(): HasMany
-    {
-        return $this->hasMany(PartyHasEntity::class);
-    }
-
-    /**
-     * Get contacts by type.
-     */
-    public function getContactsByType($type)
-    {
-        return $this->contacts()->where('contact_type', $type)->get();
-    }
-
-    /**
-     * Get phone contacts.
-     */
-    public function phoneContacts()
-    {
-        return $this->contacts()->where('phone', '!=', null);
-    }
-
-    /**
-     * Get email contacts.
-     */
-    public function emailContacts()
-    {
-        return $this->contacts()->where('email', '!=', null);
-    }
-
-    /**
-     * Get all entities of a specific type linked to this party.
-     */
-    public function getEntitiesByType(string $modelType)
-    {
-        return $this->entityRelationships()
-                   ->where('model_type', $modelType)
-                   ->with('entity')
-                   ->get()
-                   ->pluck('entity');
-    }
-
-    /**
-     * Get customers linked to this party.
-     */
-    public function customers()
-    {
-        return $this->getEntitiesByType('App\Models\Customer');
-    }
-
-    /**
-     * Get suppliers linked to this party.
-     */
-    public function suppliers()
-    {
-        return $this->getEntitiesByType('App\Models\Supplier');
-    }
-
-    /**
-     * Get employees linked to this party.
-     */
-    public function employees()
-    {
-        return $this->getEntitiesByType('App\Models\Employee');
-    }
-
-    /**
-     * Link an entity to this party.
-     */
-    public function linkEntity(Model $entity): PartyHasEntity
-    {
-        return PartyHasEntity::createRelationship($this->id, $entity);
-    }
-
-    /**
-     * Unlink an entity from this party.
-     */
-    public function unlinkEntity(Model $entity): bool
-    {
-        return PartyHasEntity::removeRelationship($this->id, $entity);
-    }
-
-    /**
-     * Check if an entity is linked to this party.
-     */
-    public function hasEntity(Model $entity): bool
-    {
-        return PartyHasEntity::relationshipExists($this->id, $entity);
-    }
-
-    /**
-     * Get count of linked entities by type.
-     */
-    public function getEntityCountByType(): array
-    {
-        return PartyHasEntity::getEntityCountByType($this->id);
-    }
-
-    /**
-     * Get total count of all linked entities.
-     */
-    public function getTotalEntitiesCountAttribute(): int
-    {
-        return $this->entityRelationships()->count();
-    }
-
-    /**
-     * Get all linked entities regardless of type.
-     */
-    public function getAllLinkedEntities()
-    {
-        return $this->entityRelationships()
-                   ->with('entity')
-                   ->get()
-                   ->pluck('entity');
-    }
-
-    /**
-     * Get entity summary for display.
-     */
-    public function getEntitySummaryAttribute(): array
-    {
-        $counts = $this->getEntityCountByType();
-        $summary = [];
-
-        foreach ($counts as $modelType => $count) {
-            $displayType = str_replace('App\\Models\\', '', $modelType);
-            $summary[] = "{$count} " . str_plural($displayType, $count);
+        if ($this->ledgers->isEmpty()) {
+            return [
+                'total_payable' => 0,
+                'total_receivable' => 0,
+                'net_payable' => 0,
+                'ledger_count' => 0
+            ];
         }
 
-        return $summary;
+        $totalPayable = 0;
+        $totalReceivable = 0;
+
+        foreach ($this->ledgers as $ledger) {
+            $balance = $ledger->getCurrentBalance();
+
+            if ($balance['type'] === 'credit') {
+                // Credit balance means we owe them (payable)
+                $totalPayable += $balance['balance'];
+            } else {
+                // Debit balance means they owe us (receivable)
+                $totalReceivable += $balance['balance'];
+            }
+        }
+
+        return [
+            'total_payable' => $totalPayable,
+            'total_receivable' => $totalReceivable,
+            'net_payable' => $totalPayable - $totalReceivable,
+            'ledger_count' => $this->ledgers->count()
+        ];
     }
 
     /**
-     * Scope to search parties by name or contact information.
+     * Get formatted display of ledgers with balances.
      */
-    public function scopeSearch($query, $search)
+    public function getLinkedLedgersDisplayAttribute(): string
     {
-        return $query->where(function ($q) use ($search) {
-            $q->where('name', 'like', "%{$search}%")
-              ->orWhereHas('contacts', function ($contactQuery) use ($search) {
-                  $contactQuery->where('name', 'like', "%{$search}%")
-                              ->orWhere('email', 'like', "%{$search}%")
-                              ->orWhere('phone', 'like', "%{$search}%")
-                              ->orWhere('mobile', 'like', "%{$search}%");
-              });
+        if ($this->ledgers->isEmpty()) {
+            return 'No linked ledgers';
+        }
+
+        $ledgerNames = $this->ledgers->map(function ($ledger) {
+            $balance = $ledger->getCurrentBalance();
+            $formattedBalance = number_format($balance['balance'], 2);
+            $type = strtoupper($balance['type']);
+            return "{$ledger->name} ({$type} {$formattedBalance})";
+        });
+
+        return implode(', ', $ledgerNames->toArray());
+    }
+
+    /**
+     * Scope to filter parties with specific ledger.
+     */
+    public function scopeWithLedger($query, Ledger $ledger)
+    {
+        return $query->whereHas('ledgers', function ($q) use ($ledger) {
+            $q->where('ledger_id', $ledger->id);
         });
     }
 
     /**
-     * Scope to filter parties by linked entity type.
+     * Check if party has a specific ledger linked.
      */
-    public function scopeWithEntityType($query, string $modelType)
+    public function hasLedger(Ledger $ledger): bool
     {
-        return $query->whereHas('entityRelationships', function ($q) use ($modelType) {
-            $q->where('model_type', $modelType);
-        });
+        return $this->ledgers()->where('ledger_id', $ledger->id)->exists();
     }
 
     /**
-     * Scope to filter parties by specific linked entity.
+     * Link a ledger to this party.
      */
-    public function scopeWithEntity($query, Model $entity)
+    public function linkLedger(Ledger $ledger): bool
     {
-        return $query->whereHas('entityRelationships', function ($q) use ($entity) {
-            $q->where('model_type', get_class($entity))
-              ->where('model_id', $entity->id);
-        });
+        if ($this->hasLedger($ledger)) {
+            return false; // Already linked
+        }
+
+        $this->ledgers()->attach($ledger->id);
+        return true;
+    }
+
+    /**
+     * Unlink a ledger from this party.
+     */
+    public function unlinkLedger(Ledger $ledger): bool
+    {
+        if (!$this->hasLedger($ledger)) {
+            return false; // Not linked
+        }
+
+        $this->ledgers()->detach($ledger->id);
+        return true;
     }
 
     /**
@@ -217,38 +146,21 @@ class Party extends Model
     {
         parent::boot();
 
-        // When deleting a party, all entity relationships are automatically deleted
-        // due to cascade delete in the migration, but we can add additional cleanup here if needed
+        // When deleting a party, all ledger relationships are automatically deleted
+        // due to cascade delete in the migration
         static::deleting(function ($party) {
             // Any additional cleanup logic can go here
-            // The entity relationships will be automatically deleted due to cascade delete
         });
     }
 
     /**
-     * Get available entity types that can be linked to parties.
+     * Activity log options.
      */
-    public static function getAvailableEntityTypes(): array
+    public function getActivitylogOptions(): LogOptions
     {
-        return [
-            'App\Models\Customer' => 'Customers',
-            'App\Models\Supplier' => 'Suppliers',
-            'App\Models\Employee' => 'Employees',
-            // Add more entity types as needed
-        ];
-    }
-
-    /**
-     * Get formatted display of linked entities.
-     */
-    public function getLinkedEntitiesDisplayAttribute(): string
-    {
-        $summary = $this->entity_summary;
-
-        if (empty($summary)) {
-            return 'No linked entities';
-        }
-
-        return implode(', ', $summary);
+        return LogOptions::defaults()
+            ->logOnly(['name', 'credit_limit', 'credit_days'])
+            ->logOnlyDirty()
+            ->dontSubmitEmptyLogs();
     }
 }
