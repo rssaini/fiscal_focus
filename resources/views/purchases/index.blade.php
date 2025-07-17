@@ -6,10 +6,24 @@
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h1>Purchase Records</h1>
-                <a href="{{ route('purchases.create') }}" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add Purchase
-                </a>
+                <div class="card-tools">
+                    <div class="btn-group">
+                        <a href="{{ route('purchases.create') }}" class="btn btn-primary btn-sm">
+                            <i class="fas fa-plus"></i> Add Purchase
+                        </a>
+
+                        <a href="{{ route('purchases.bulk-import') }}" class="btn btn-success btn-sm">
+                            <i class="fas fa-upload"></i> Bulk Import
+                        </a>
+
+                        {{-- Add export button if you want --}}
+                        <a href="{{ route('purchases.export') }}" class="btn btn-info btn-sm">
+                            <i class="fas fa-download"></i> Export
+                        </a>
+                    </div>
+                </div>
             </div>
+
 
             <!-- Filters -->
             <div class="card mb-4">

@@ -11,6 +11,9 @@ use App\Http\Controllers\EntityManagementController;
 use App\Http\Controllers\VehicleController;
 use App\Http\Controllers\MinesController;
 use App\Http\Controllers\PurchaseController;
+use App\Http\Controllers\SaleController;
+use App\Http\Controllers\SalePaymentController;
+use App\Http\Controllers\Api\SalesApiController;
 
 // Auth::routes();
 
@@ -99,6 +102,55 @@ Route::resource('vehicles', VehicleController::class);
 Route::resource('mines', MinesController::class);
 Route::resource('purchases', PurchaseController::class);
 
+Route::prefix('purchases')->name('purchases.')->group(function () {
+
+    // Bulk import routes
+    Route::get('/bulk/import', [PurchaseController::class, 'bulkImport'])->name('bulk-import');
+    Route::get('/bulk/template', [PurchaseController::class, 'downloadTemplate'])->name('download-template');
+    Route::post('/bulk/import', [PurchaseController::class, 'processBulkImport'])->name('process-bulk-import');
+    Route::post('/bulk/preview', [PurchaseController::class, 'previewImport'])->name('preview-import');
+    Route::post('/bulk/validate', [PurchaseController::class, 'validateImport'])->name('validate-import');
+
+    // Export routes
+    Route::get('/export/export', [PurchaseController::class, 'export'])->name('export');
+    Route::delete('/bulk-delete', [PurchaseController::class, 'bulkDelete'])->name('bulk-delete');
+
+});
+
     // API route for getting vehicle drivers
     Route::get('/api/vehicles/{vehicle}/drivers', [PurchaseController::class, 'getVehicleDrivers']);
+
+
+Route::prefix('sales')->name('sales.')->group(function () {
+    Route::get('/', [SaleController::class, 'index'])->name('index');
+    Route::get('/create', [SaleController::class, 'create'])->name('create');
+    Route::post('/', [SaleController::class, 'store'])->name('store');
+    Route::post('/quick-store', [SaleController::class, 'quickStore'])->name('quick-store');
+    Route::get('/{sale}', [SaleController::class, 'show'])->name('show');
+    Route::get('/{sale}/edit', [SaleController::class, 'edit'])->name('edit');
+    Route::put('/{sale}', [SaleController::class, 'update'])->name('update');
+    Route::delete('/{sale}', [SaleController::class, 'destroy'])->name('destroy');
+    Route::patch('/{sale}/confirm', [SaleController::class, 'confirm'])->name('confirm');
+    Route::patch('/{sale}/cancel', [SaleController::class, 'cancel'])->name('cancel');
+
+    // Payment Routes
+    Route::prefix('{sale}/payments')->name('payments.')->group(function () {
+        Route::get('/', [SalePaymentController::class, 'index'])->name('index');
+        Route::get('/create', [SalePaymentController::class, 'create'])->name('create');
+        Route::post('/', [SalePaymentController::class, 'store'])->name('store');
+        Route::post('/multiple', [SalePaymentController::class, 'storeMultiple'])->name('store-multiple');
+        Route::get('/{payment}', [SalePaymentController::class, 'show'])->name('show');
+        Route::get('/{payment}/edit', [SalePaymentController::class, 'edit'])->name('edit');
+        Route::put('/{payment}', [SalePaymentController::class, 'update'])->name('update');
+        Route::delete('/{payment}', [SalePaymentController::class, 'destroy'])->name('destroy');
+    });
+});
+
+
+Route::prefix('api/sales')->group(function () {
+    Route::get('/customer/{customer}', [SalesApiController::class, 'getCustomerInfo']);
+    Route::get('/product/{product}', [SalesApiController::class, 'getProductInfo']);
+    Route::post('/calculate-amounts', [SalesApiController::class, 'calculateSaleAmounts']);
+    Route::get('/summary', [SalesApiController::class, 'getSalesSummary']);
+});
 
