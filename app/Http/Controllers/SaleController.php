@@ -2,26 +2,27 @@
 namespace App\Http\Controllers;
 
 use App\Models\Sale;
-use App\Models\Customer;
+use App\Models\SaleItem;
+use App\Models\Consignee;
 use App\Models\Party;
 use App\Models\Product;
-use App\Http\Requests\SaleRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 class SaleController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Sale::with(['customer', 'refParty', 'product']);
+        $query = Sale::with(['consignee', 'refParty', 'items.product']);
 
         // Apply filters
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        if ($request->filled('customer_id')) {
-            $query->where('customer_id', $request->customer_id);
+        if ($request->filled('consignee_id')) {
+            $query->where('consignee_id', $request->consignee_id);
         }
 
         if ($request->filled('date_from')) {
@@ -43,54 +44,68 @@ class SaleController extends Controller
         }
 
         $sales = $query->orderBy('date', 'desc')->paginate(15);
+        $consignees = Consignee::active()->pluck('consignee_name', 'id');
 
-        $customers = Customer::active()->pluck('name', 'id');
-
-        return view('sales.index', compact('sales', 'customers'));
+        return view('sales.index', compact('sales', 'consignees'));
     }
 
     public function create()
     {
-        $customers = Customer::active()->get();
+        $consignees = Consignee::active()->get();
         $parties = Party::all();
         $products = Product::active()->get();
 
-        return view('sales.create', compact('customers', 'parties', 'products'));
+        return view('sales.create', compact('consignees', 'parties', 'products'));
     }
 
     public function store(Request $request)
     {
+        $validator = Validator::make($request->all(), [
+            'date' => 'required|date',
+            'vehicle_no' => 'required|string|max:20',
+            'tare_wt' => 'required|integer|min:0',
+            'product_id' => 'required|exists:products,id',
+            'product_rate' => 'required|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()->back()
+                           ->withErrors($validator)
+                           ->withInput();
+        }
+
         try {
             DB::beginTransaction();
-            $data = $request->validate([
-                'vehicle_no' => 'required|string|max:20',
-                'tare_wt' => 'required|numeric|min:0',
-                'product_id' => 'required|exists:products,id',
-                'product_rate' => 'nullable|numeric|min:0',
-                'date' => 'nullable|date',
+
+            // Create the sale record
+            $sale = Sale::create([
+                'date' => $request->date,
+                'vehicle_no' => $request->vehicle_no,
+                'tare_wt' => $request->tare_wt,
+                'status' => 'pending',
+                'subtotal' => 0,
+                'discount_amount' => 0,
+                'tax_amount' => 0,
+                'total_amount' => 0,
             ]);
 
-            /*
-            // Generate invoice number if not provided
-            if (empty($data['invoice_number'])) {
-                $data['invoice_number'] = Sale::generateInvoiceNumber();
-            }
-            */
-
-            // Set date if not provided
-            if (empty($data['date'])) {
-                $data['date'] = now();
-            }
-
-            $sale = Sale::create($data);
-
+            // Create the first sale item
+            $saleItem = SaleItem::create([
+                'sale_id' => $sale->id,
+                'product_id' => $request->product_id,
+                'tare_wt' => $request->tare_wt, // First item uses sale's tare weight
+                'rate' => $request->product_rate,
+                'sort_order' => 1,
+            ]);
 
             DB::commit();
+
             return redirect()->route('sales.show', $sale)
-                           ->with('success', 'Sale created successfully.');
+                           ->with('success', 'Sale created successfully. Please weigh the loaded vehicle to complete the first product.');
 
         } catch (\Exception $e) {
             DB::rollBack();
+
             return redirect()->back()
                            ->withInput()
                            ->with('error', 'Error creating sale: ' . $e->getMessage());
@@ -99,47 +114,69 @@ class SaleController extends Controller
 
     public function show(Sale $sale)
     {
-        $sale->load(['customer', 'refParty', 'product', 'payments']);
+        if ($sale->status === 'draft') {
+            return redirect()->route('sales.edit', $sale->id);
+        }
+        $sale->load(['consignee', 'refParty', 'items.product', 'payments']);
 
         return view('sales.show', compact('sale'));
     }
 
     public function edit(Sale $sale)
     {
-        // Only allow editing of draft or confirmed sales
         if (in_array($sale->status, ['paid', 'cancelled'])) {
             return redirect()->route('sales.show', $sale)
                            ->with('error', 'Cannot edit ' . $sale->status . ' sales.');
         }
+        if ($sale->status !== 'draft') {
+            return redirect()->route('sales.show', $sale)
+                           ->with('error', 'Only draft sales can be updated.');
+        }
 
-        $customers = Customer::active()->get();
+        $consignees = Consignee::active()->get();
         $parties = Party::all();
         $products = Product::active()->get();
+        $sale->load(['items.product']);
 
-        return view('sales.edit', compact('sale', 'customers', 'parties', 'products'));
+        return view('sales.edit', compact('sale', 'consignees', 'parties', 'products'));
     }
 
-    public function update(SaleRequest $request, Sale $sale)
+    public function update(Request $request, Sale $sale)
     {
-        // Only allow updating of draft or confirmed sales
         if (in_array($sale->status, ['paid', 'cancelled'])) {
             return redirect()->route('sales.show', $sale)
                            ->with('error', 'Cannot update ' . $sale->status . ' sales.');
         }
 
+        $validator = Validator::make($request->all(), [
+            'date' => 'required|date',
+            'consignee_id' => 'nullable|exists:consignees,id',
+            'ref_party_id' => 'nullable|exists:parties,id',
+            'vehicle_no' => 'required|string|max:20',
+            'tp_no' => 'nullable|string|max:50',
+            'tp_wt' => 'nullable|numeric|min:0',
+            'rec_no' => 'nullable|string|max:50',
+            'royalty_book_no' => 'nullable|string|max:50',
+            'royalty_receipt_no' => 'nullable|string|max:50',
+            'consignee_name' => 'nullable|string|max:255',
+            'consignee_address' => 'nullable|string',
+            'discount_amount' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()->back()
+                           ->withErrors($validator)
+                           ->withInput();
+        }
+
         try {
-            DB::beginTransaction();
-
-            $data = $request->validated();
-            $sale->update($data);
-
-            DB::commit();
+            $sale->update($request->all());
 
             return redirect()->route('sales.show', $sale)
                            ->with('success', 'Sale updated successfully.');
 
         } catch (\Exception $e) {
-            DB::rollBack();
             return redirect()->back()
                            ->withInput()
                            ->with('error', 'Error updating sale: ' . $e->getMessage());
@@ -148,7 +185,6 @@ class SaleController extends Controller
 
     public function destroy(Sale $sale)
     {
-        // Only allow deletion of draft sales
         if ($sale->status !== 'draft') {
             return redirect()->route('sales.index')
                            ->with('error', 'Only draft sales can be deleted.');
@@ -156,11 +192,108 @@ class SaleController extends Controller
 
         try {
             $sale->delete();
+
             return redirect()->route('sales.index')
                            ->with('success', 'Sale deleted successfully.');
         } catch (\Exception $e) {
             return redirect()->route('sales.index')
                            ->with('error', 'Error deleting sale: ' . $e->getMessage());
+        }
+    }
+
+    // Add gross weight to a sale item (weighing process)
+    public function weighItem(Request $request, Sale $sale, SaleItem $saleItem)
+    {
+        $validator = Validator::make($request->all(), [
+            'gross_wt' => 'required|integer|min:' . ($saleItem->tare_wt + 1),
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()->back()
+                           ->withErrors($validator)
+                           ->with('error', 'Gross weight must be greater than tare weight (' . $saleItem->tare_wt . ' kg)');
+        }
+
+        try {
+            $saleItem->update([
+                'gross_wt' => $request->gross_wt
+            ]);
+
+            return redirect()->back()
+                           ->with('success', 'Item weighed successfully. Net weight: ' . $saleItem->formatted_weight);
+
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error weighing item: ' . $e->getMessage());
+        }
+    }
+
+    // Add a new product to the sale
+    public function addProduct(Request $request, Sale $sale)
+    {
+        if (!$sale->canAddProducts()) {
+            return redirect()->back()
+                           ->with('error', 'Cannot add products to ' . $sale->status . ' sales.');
+        }
+
+        $validator = Validator::make($request->all(), [
+            'product_id' => 'required|exists:products,id',
+            'rate' => 'required|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()->back()
+                           ->withErrors($validator);
+        }
+
+        try {
+            $nextSortOrder = SaleItem::getNextSortOrder($sale->id);
+            $tareWeight = SaleItem::calculateTareWeight($sale->id, $nextSortOrder);
+
+            $saleItem = SaleItem::create([
+                'sale_id' => $sale->id,
+                'product_id' => $request->product_id,
+                'tare_wt' => $tareWeight,
+                'rate' => $request->rate,
+                'sort_order' => $nextSortOrder,
+            ]);
+
+            return redirect()->back()
+                           ->with('success', 'Product added successfully. Tare weight: ' . number_format($tareWeight) . ' kg. Please weigh the loaded vehicle.');
+
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error adding product: ' . $e->getMessage());
+        }
+    }
+
+    // Remove a product from the sale
+    public function removeProduct(Sale $sale, SaleItem $saleItem)
+    {
+        if (!$sale->canAddProducts()) {
+            return redirect()->back()
+                           ->with('error', 'Cannot remove products from ' . $sale->status . ' sales.');
+        }
+
+        try {
+            // Check if this item affects subsequent items
+            $subsequentItems = SaleItem::where('sale_id', $sale->id)
+                                     ->where('sort_order', '>', $saleItem->sort_order)
+                                     ->exists();
+
+            if ($subsequentItems) {
+                return redirect()->back()
+                               ->with('error', 'Cannot remove this product as it affects subsequent items. Remove later products first.');
+            }
+
+            $saleItem->delete();
+
+            return redirect()->back()
+                           ->with('success', 'Product removed successfully.');
+
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error removing product: ' . $e->getMessage());
         }
     }
 
@@ -171,10 +304,52 @@ class SaleController extends Controller
                            ->with('error', 'Only draft sales can be confirmed.');
         }
 
-        $sale->update(['status' => 'confirmed']);
+        // Check if all items are complete
+        $incompleteItems = $sale->items()->where(function($q) {
+            $q->whereNull('gross_wt')->orWhere('gross_wt', 0);
+        })->count();
 
-        return redirect()->back()
-                       ->with('success', 'Sale confirmed successfully.');
+        if ($incompleteItems > 0) {
+            return redirect()->back()
+                           ->with('error', 'Cannot confirm sale. ' . $incompleteItems . ' items are not weighed yet.');
+        }
+
+        try {
+            $sale->update(['status' => 'confirmed']);
+
+            return redirect()->back()
+                           ->with('success', 'Sale confirmed successfully.');
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error confirming sale: ' . $e->getMessage());
+        }
+    }
+
+    public function draft(Sale $sale)
+    {
+        if ($sale->status !== 'pending') {
+            return redirect()->back()
+                           ->with('error', 'Only pending sales can be drafted.');
+        }
+
+        // Check if all items are complete
+        $incompleteItems = $sale->items()->where(function($q) {
+            $q->whereNull('gross_wt')->orWhere('gross_wt', 0);
+        })->count();
+
+        if ($incompleteItems > 0) {
+            return redirect()->back()
+                           ->with('error', 'Cannot draft sale. ' . $incompleteItems . ' items are not weighed yet.');
+        }
+
+        try {
+            $sale->update(['status' => 'draft']);
+            return redirect()->route('sales.edit', $sale->id)->with('success', 'Sale drafted successfully.');
+
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error drafting sale: ' . $e->getMessage());
+        }
     }
 
     public function cancel(Sale $sale)
@@ -184,48 +359,34 @@ class SaleController extends Controller
                            ->with('error', 'Cannot cancel ' . $sale->status . ' sales.');
         }
 
-        $sale->update(['status' => 'cancelled']);
+        try {
+            $sale->update(['status' => 'cancelled']);
 
-        return redirect()->back()
-                       ->with('success', 'Sale cancelled successfully.');
+            return redirect()->back()
+                           ->with('success', 'Sale cancelled successfully.');
+        } catch (\Exception $e) {
+            return redirect()->back()
+                           ->with('error', 'Error cancelling sale: ' . $e->getMessage());
+        }
     }
 
-    // Quick create for minimal required fields
-    public function quickStore(Request $request)
+    // API endpoint to get product details and default rate
+    public function getProductDetails(Product $product)
     {
-        $request->validate([
-            'tare_wt' => 'required|numeric|min:0',
-            'gross_wt' => 'required|numeric|min:0|gt:tare_wt',
-            'product_id' => 'required|exists:products,id',
-            'vehicle_no' => 'required|string|max:20',
+        return response()->json([
+            'id' => $product->id,
+            'name' => $product->name,
+            'code' => $product->code,
+            'default_rate' => $product->default_rate,
         ]);
+    }
 
-        try {
-            DB::beginTransaction();
-
-            $sale = Sale::create([
-                'invoice_number' => Sale::generateInvoiceNumber(),
-                'date' => now(),
-                'tare_wt' => $request->tare_wt,
-                'gross_wt' => $request->gross_wt,
-                'product_id' => $request->product_id,
-                'vehicle_no' => $request->vehicle_no,
-                'rec_no' => 'TEMP-' . time(), // Temporary receipt number
-                'consignee_name' => 'To be filled',
-                'consignee_address' => 'To be filled',
-                'status' => 'draft'
-            ]);
-
-            DB::commit();
-
-            return redirect()->route('sales.edit', $sale)
-                           ->with('success', 'Sale created. Please complete the remaining details.');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return redirect()->back()
-                           ->withInput()
-                           ->with('error', 'Error creating sale: ' . $e->getMessage());
-        }
+    // API endpoint to get next tare weight for adding product
+    public function getNextTareWeight(Sale $sale)
+    {
+        return response()->json([
+            'next_tare_weight' => $sale->getNextTareWeight(),
+            'can_add_products' => $sale->canAddProducts(),
+        ]);
     }
 }

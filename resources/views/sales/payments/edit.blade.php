@@ -30,7 +30,7 @@
                                             <strong>Invoice:</strong> {{ $sale->invoice_number }}
                                         </div>
                                         <div class="col-md-3">
-                                            <strong>Customer:</strong> {{ $sale->customer->name }}
+                                            <strong>Consignee:</strong> {{ $sale->consignee?->consignee_name }}
                                         </div>
                                         <div class="col-md-3">
                                             <strong>Total Amount:</strong> ₹{{ number_format($sale->total_amount, 2) }}

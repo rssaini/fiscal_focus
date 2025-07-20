@@ -14,6 +14,8 @@ use App\Http\Controllers\PurchaseController;
 use App\Http\Controllers\SaleController;
 use App\Http\Controllers\SalePaymentController;
 use App\Http\Controllers\Api\SalesApiController;
+use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\ConsigneeController;
 
 // Auth::routes();
 
@@ -121,19 +123,32 @@ Route::prefix('purchases')->name('purchases.')->group(function () {
     Route::get('/api/vehicles/{vehicle}/drivers', [PurchaseController::class, 'getVehicleDrivers']);
 
 
+
+
+
 Route::prefix('sales')->name('sales.')->group(function () {
+    // Basic CRUD routes
     Route::get('/', [SaleController::class, 'index'])->name('index');
     Route::get('/create', [SaleController::class, 'create'])->name('create');
     Route::post('/', [SaleController::class, 'store'])->name('store');
-    Route::post('/quick-store', [SaleController::class, 'quickStore'])->name('quick-store');
     Route::get('/{sale}', [SaleController::class, 'show'])->name('show');
     Route::get('/{sale}/edit', [SaleController::class, 'edit'])->name('edit');
     Route::put('/{sale}', [SaleController::class, 'update'])->name('update');
     Route::delete('/{sale}', [SaleController::class, 'destroy'])->name('destroy');
+
+    // Status management routes
     Route::patch('/{sale}/confirm', [SaleController::class, 'confirm'])->name('confirm');
     Route::patch('/{sale}/cancel', [SaleController::class, 'cancel'])->name('cancel');
+    Route::patch('/{sale}/draft', [SaleController::class, 'draft'])->name('draft');
 
-    // Payment Routes
+    // Product management routes (for sequential loading)
+    Route::prefix('{sale}/items')->name('items.')->group(function () {
+        Route::post('/add', [SaleController::class, 'addProduct'])->name('add');
+        Route::patch('/{saleItem}/weigh', [SaleController::class, 'weighItem'])->name('weigh');
+        Route::delete('/{saleItem}', [SaleController::class, 'removeProduct'])->name('remove');
+    });
+
+    // Payment Routes (if not already defined)
     Route::prefix('{sale}/payments')->name('payments.')->group(function () {
         Route::get('/', [SalePaymentController::class, 'index'])->name('index');
         Route::get('/create', [SalePaymentController::class, 'create'])->name('create');
@@ -144,13 +159,24 @@ Route::prefix('sales')->name('sales.')->group(function () {
         Route::put('/{payment}', [SalePaymentController::class, 'update'])->name('update');
         Route::delete('/{payment}', [SalePaymentController::class, 'destroy'])->name('destroy');
     });
+
+    // PDF Invoice routes
+    Route::get('/{sale}/invoice/pdf', [InvoiceController::class, 'generatePDF'])->name('invoice.pdf');
+    Route::get('/{sale}/weighment-slip', [InvoiceController::class, 'weighmentSlip'])->name('weighment.slip');
+    Route::get('/{sale}/invoice/download', [InvoiceController::class, 'downloadPDF'])->name('invoice.download');
+    Route::get('/{sale}/invoice/print', [InvoiceController::class, 'printPDF'])->name('invoice.print');
 });
 
-
-Route::prefix('api/sales')->group(function () {
-    Route::get('/customer/{customer}', [SalesApiController::class, 'getCustomerInfo']);
-    Route::get('/product/{product}', [SalesApiController::class, 'getProductInfo']);
-    Route::post('/calculate-amounts', [SalesApiController::class, 'calculateSaleAmounts']);
-    Route::get('/summary', [SalesApiController::class, 'getSalesSummary']);
+// API routes for AJAX calls
+Route::prefix('api/sales')->name('api.sales.')->group(function () {
+    Route::get('/products/{product}', [SaleController::class, 'getProductDetails'])->name('product-details');
+    Route::get('/{sale}/next-tare-weight', [SaleController::class, 'getNextTareWeight'])->name('next-tare-weight');
 });
 
+// If you need to load product info in create form
+Route::get('/api/products/{product}', [SaleController::class, 'getProductDetails'])->name('api.products.show');
+
+// Consignee Routes
+Route::resource('consignees', ConsigneeController::class);
+Route::get('consignees-export', [ConsigneeController::class, 'export'])->name('consignees.export');
+Route::get('consignees-search', [ConsigneeController::class, 'search'])->name('consignees.search');

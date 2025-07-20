@@ -67,8 +67,8 @@
                                             </td>
                                         </tr>
                                         <tr>
-                                            <td><strong>Customer:</strong></td>
-                                            <td>{{ $sale->customer->name }}</td>
+                                            <td><strong>Consignee:</strong></td>
+                                            <td>{{ $sale->consignee?->consignee_name }}</td>
                                         </tr>
                                         <tr>
                                             <td><strong>Sale Date:</strong></td>

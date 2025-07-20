@@ -89,7 +89,7 @@
                             <div class="col-12">
                                 <div class="d-flex justify-content-end gap-2">
                                     <a href="{{ route('sales.index') }}" class="btn btn-secondary">Cancel</a>
-                                    <button type="submit" name="action" value="draft" class="btn btn-warning">Save as Draft</button>
+                                    <button type="submit" name="action" value="pending" class="btn btn-warning">Create Sale</button>
                                 </div>
                             </div>
                         </div>
@@ -102,25 +102,99 @@
 
 <script>
 function loadProductInfo() {
-    const productId = document.getElementById('product_id').value;
-    if (!productId) return;
+    const productSelect = document.getElementById('product_id');
+    const rateInput = document.getElementById('product_rate');
 
-    fetch(`/api/sales/product/${productId}`)
+    if (!productSelect.value) {
+        rateInput.value = '';
+        return;
+    }
+
+    // Show loading state
+    rateInput.value = 'Loading...';
+    rateInput.disabled = true;
+
+    // Fetch product details
+    fetch(`/api/products/${productSelect.value}`)
         .then(response => response.json())
         .then(data => {
-            if (!data.error && data.default_rate) {
-                document.getElementById('product_rate').value = data.default_rate;
-            }
+            rateInput.value = data.default_rate || '';
+            rateInput.disabled = false;
+            rateInput.focus();
         })
-        .catch(error => console.error('Error:', error));
+        .catch(error => {
+            console.error('Error loading product info:', error);
+            rateInput.value = '';
+            rateInput.disabled = false;
+            alert('Error loading product information. Please enter rate manually.');
+        });
 }
 
-// Add CSRF token to meta tag if not present
-if (!document.querySelector('meta[name="csrf-token"]')) {
-    const meta = document.createElement('meta');
-    meta.name = 'csrf-token';
-    meta.content = '{{ csrf_token() }}';
-    document.getElementsByTagName('head')[0].appendChild(meta);
+// Function to validate form before submission
+function validateSaleForm() {
+    const vehicleNo = document.getElementById('vehicle_no').value.trim();
+    const tareWt = parseInt(document.getElementById('tare_wt').value);
+    const productId = document.getElementById('product_id').value;
+    const productRate = parseFloat(document.getElementById('product_rate').value);
+
+    // Basic validations
+    if (!vehicleNo) {
+        alert('Please enter vehicle number');
+        document.getElementById('vehicle_no').focus();
+        return false;
+    }
+
+    if (!tareWt || tareWt <= 0) {
+        alert('Please enter valid tare weight');
+        document.getElementById('tare_wt').focus();
+        return false;
+    }
+
+    if (!productId) {
+        alert('Please select a product');
+        document.getElementById('product_id').focus();
+        return false;
+    }
+
+    if (!productRate || productRate <= 0) {
+        alert('Please enter valid product rate');
+        document.getElementById('product_rate').focus();
+        return false;
+    }
+
+    return true;
 }
+
+// Add event listeners when document is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // Add form validation on submit
+    const saleForm = document.getElementById('saleForm');
+    if (saleForm) {
+        saleForm.addEventListener('submit', function(e) {
+            if (!validateSaleForm()) {
+                e.preventDefault();
+            }
+        });
+    }
+
+    // Format vehicle number input (uppercase)
+    const vehicleInput = document.getElementById('vehicle_no');
+    if (vehicleInput) {
+        vehicleInput.addEventListener('input', function() {
+            this.value = this.value.toUpperCase();
+        });
+    }
+
+    // Auto-focus first empty field
+    const requiredFields = ['vehicle_no', 'tare_wt', 'product_id', 'product_rate'];
+    for (const fieldId of requiredFields) {
+        const field = document.getElementById(fieldId);
+        if (field && !field.value) {
+            field.focus();
+            break;
+        }
+    }
+});
+
 </script>
 @endsection

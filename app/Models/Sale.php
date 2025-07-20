@@ -3,7 +3,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Sale extends Model
 {
@@ -12,26 +11,25 @@ class Sale extends Model
     protected $fillable = [
         'invoice_number',
         'date',
-        'customer_id',
+        'consignee_id',
         'ref_party_id',
         'vehicle_no',
         'tare_wt',
         'gross_wt',
-        'product_id',
-        'product_rate',
         'net_wt',
         'wt_ton',
-        'amount',
+        'subtotal',
+        'discount_amount',
+        'driver_commission',
         'tp_no',
         'invoice_rate',
         'tp_wt',
-        'cgst',
-        'sgst',
-        'total_gst',
+        'tax_amount',
         'total_amount',
         'rec_no',
         'royalty_book_no',
         'royalty_receipt_no',
+        'royalty_wt',
         'status',
         'consignee_name',
         'consignee_address',
@@ -42,23 +40,22 @@ class Sale extends Model
         'date' => 'datetime',
         'tare_wt' => 'integer',
         'gross_wt' => 'integer',
-        'product_rate' => 'decimal:2',
         'net_wt' => 'integer',
         'wt_ton' => 'decimal:3',
-        'amount' => 'decimal:2',
+        'subtotal' => 'decimal:2',
+        'discount_amount' => 'decimal:2',
+        'driver_commission' => 'decimal:2',
         'invoice_rate' => 'decimal:2',
         'tp_wt' => 'decimal:2',
-        'cgst' => 'decimal:2',
-        'sgst' => 'decimal:2',
-        'total_gst' => 'decimal:2',
+        'tax_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'status' => 'string'
     ];
 
     // Relationships
-    public function customer()
+    public function consignee()
     {
-        return $this->belongsTo(Customer::class);
+        return $this->belongsTo(Consignee::class);
     }
 
     public function refParty()
@@ -66,9 +63,9 @@ class Sale extends Model
         return $this->belongsTo(Party::class, 'ref_party_id');
     }
 
-    public function product()
+    public function items()
     {
-        return $this->belongsTo(Product::class);
+        return $this->hasMany(SaleItem::class)->orderBy('sort_order');
     }
 
     public function payments()
@@ -76,93 +73,94 @@ class Sale extends Model
         return $this->hasMany(SalePayment::class);
     }
 
-    // Calculated Fields & Mutators
-    public function calculateNetWeight()
-    {
-        if ($this->gross_wt && $this->tare_wt) {
-            $this->net_wt = $this->gross_wt - $this->tare_wt;
-            return $this->net_wt;
-        }
-        return 0;
-    }
-
-    public function calculateWeightInTons()
-    {
-        if ($this->net_wt) {
-            $this->wt_ton = $this->net_wt / 1000;
-            return $this->wt_ton;
-        }
-        return 0;
-    }
-
-    public function calculateAmount()
-    {
-        if ($this->wt_ton && $this->product_rate) {
-            $this->amount = $this->wt_ton * $this->product_rate;
-            return $this->amount;
-        }
-        return 0;
-    }
-
-    public function calculateGST()
-    {
-        if ($this->invoice_rate && $this->tp_wt) {
-            $gstBase = $this->invoice_rate * $this->tp_wt;
-            $this->cgst = $gstBase * 0.025; // 2.5%
-            $this->sgst = $gstBase * 0.025; // 2.5%
-            $this->total_gst = $this->cgst + $this->sgst;
-            return $this->total_gst;
-        }
-        return 0;
-    }
-
-    public function calculateTotalAmount()
-    {
-        if ($this->amount && $this->total_gst !== null) {
-            $this->total_amount = $this->amount + $this->total_gst;
-            return $this->total_amount;
-        }
-        return $this->amount ?: 0;
-    }
-
-    // Auto-calculate fields before saving
-    public static function boot()
+    // Boot method for auto-calculations
+    protected static function boot()
     {
         parent::boot();
 
-        static::saving(function ($sale) {
-            $sale->calculateNetWeight();
-            $sale->calculateWeightInTons();
-            $sale->calculateAmount();
-            $sale->calculateGST();
-            $sale->calculateTotalAmount();
+        static::saved(function ($sale) {
+            $sale->updateTotalsFromItems();
+        });
+        static::updated(function ($sale) {
+            if($sale->status == 'confirmed' && $sale->tp_no && !$sale->invoice_number) {
+                $sale->invoice_number = self::generateInvoiceNumber();
+                $sale->saveQuietly();
+            }
         });
     }
 
-    // Scopes
-    public function scopeByStatus($query, $status)
+    // Update sale totals from sale items
+    public function updateTotalsFromItems()
     {
-        return $query->where('status', $status);
+        $items = $this->items;
+
+        if ($items->count() > 0) {
+            // Get the latest item's gross weight as sale gross weight
+            $latestItem = $items->sortByDesc('sort_order')->first();
+            $this->gross_wt = $latestItem->gross_wt;
+
+            // Calculate net weight and subtotal
+            $this->net_wt = $this->gross_wt ? $this->gross_wt - $this->tare_wt : null;
+            $this->wt_ton = $this->net_wt ? $this->net_wt / 1000 : null;
+            $this->subtotal = $items->sum('amount');
+            if($this->tp_wt && $this->invoice_rate) {
+                $this->tax_amount = $this->tp_wt * $this->invoice_rate * 5 / 100; // Assuming 5% GST
+            } else {
+                $this->tax_amount = 0 ;
+            }
+
+            $this->total_amount = $this->subtotal + $this->tax_amount - $this->discount_amount;
+
+            // Save without triggering events
+            $this->saveQuietly();
+        }
     }
 
-    public function scopeByCustomer($query, $customerId)
+    // Generate invoice number
+    public static function generateInvoiceNumber()
     {
-        return $query->where('customer_id', $customerId);
+        $year = date('Y');
+        $month = date('m');
+        $prefix = "JBBSC/25-26/";
+
+        $lastInvoice = self::where('invoice_number', 'like', $prefix.'%')
+                          ->orderBy('invoice_number', 'desc')
+                          ->first();
+
+        if ($lastInvoice) {
+            $lastNumber = (int) substr($lastInvoice->invoice_number, strlen($prefix));
+            $newNumber = $lastNumber + 1;
+        } else {
+            $newNumber = 1;
+        }
+
+        return $prefix . $newNumber;
     }
 
-    public function scopeByDateRange($query, $startDate, $endDate)
-    {
-        return $query->whereBetween('date', [$startDate, $endDate]);
+    public function lastItemName(){
+        return $this->items()->orderBy('sort_order', 'desc')->first()->product->name;
     }
 
-    public function scopePaid($query)
+    // Get next tare weight for new product
+    public function getNextTareWeight()
     {
-        return $query->where('status', 'paid');
+        $lastItem = $this->items()->orderBy('sort_order', 'desc')->first();
+        return $lastItem && $lastItem->gross_wt ? $lastItem->gross_wt : $this->tare_wt;
     }
 
-    public function scopeUnpaid($query)
+    // Check if sale can add more products
+    public function canAddProducts()
     {
-        return $query->whereIn('status', ['confirmed', 'partially_paid']);
+        if($this->status == 'pending'){
+             $canAdd = true;
+            foreach($this->items as $item){
+                if ($canAdd && !$item->gross_wt) {
+                    $canAdd = false;
+                }
+            }
+            return $canAdd;
+        }
+        return false;
     }
 
     // Payment related methods
@@ -187,7 +185,7 @@ class Sale extends Model
         return $paid > 0 && $paid < $this->total_amount;
     }
 
-    // Update payment status based on payments
+    // Update payment status
     public function updatePaymentStatus()
     {
         if ($this->isFullyPaid()) {
@@ -197,27 +195,47 @@ class Sale extends Model
         } else {
             $this->status = 'confirmed';
         }
-        $this->save();
+        $this->saveQuietly();
     }
 
-    // Generate invoice number
-    public static function generateInvoiceNumber()
+    // Scopes
+    public function scopeByStatus($query, $status)
     {
-        $year = date('Y');
-        $month = date('m');
-        $prefix = "INV-{$year}{$month}-";
+        return $query->where('status', $status);
+    }
 
-        $lastInvoice = self::where('invoice_number', 'like', $prefix.'%')
-                          ->orderBy('invoice_number', 'desc')
-                          ->first();
+    public function scopeByConsignee($query, $consigneeId)
+    {
+        return $query->where('consignee_id', $consigneeId);
+    }
 
-        if ($lastInvoice) {
-            $lastNumber = (int) substr($lastInvoice->invoice_number, strlen($prefix));
-            $newNumber = $lastNumber + 1;
-        } else {
-            $newNumber = 1;
-        }
+    public function scopeByDateRange($query, $startDate, $endDate)
+    {
+        return $query->whereBetween('date', [$startDate, $endDate]);
+    }
 
-        return $prefix . str_pad($newNumber, 4, '0', STR_PAD_LEFT);
+    // Accessors
+    public function getFormattedTotalAmountAttribute()
+    {
+        return '₹' . number_format($this->total_amount, 2);
+    }
+
+    public function getFormattedWeightAttribute()
+    {
+        return $this->wt_ton ? number_format($this->wt_ton, 3) . ' tons' : 'N/A';
+    }
+
+    public function getStatusBadgeAttribute()
+    {
+        $classes = [
+            'draft' => 'badge-warning',
+            'confirmed' => 'badge-info',
+            'paid' => 'badge-success',
+            'partially_paid' => 'badge-primary',
+            'cancelled' => 'badge-danger'
+        ];
+
+        $class = $classes[$this->status] ?? 'badge-secondary';
+        return "<span class=\"badge {$class}\">" . ucfirst(str_replace('_', ' ', $this->status)) . "</span>";
     }
 }
